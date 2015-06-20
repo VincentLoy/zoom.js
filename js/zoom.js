@@ -1,238 +1,255 @@
-+function (window, document) { "use strict";
-  var ZOOM_HANDLERS = [
-    '_clickHandler',
-    '_zoom',
-    '_scrollHandler',
-    '_keyHandler',
-    '_touchStart',
-    '_touchMove'
-  ]
+(function (window, document) {
+    "use strict";
+    /*global window, document*/
+    var ZOOMHANDLERS = [
+            'clickHandler',
+            'zoom',
+            'scrollHandler',
+            'keyHandler',
+            'touchStart',
+            'touchMove'
+        ],
+        onload,
+        dispose;
 
-  /**
-   * The zoom service
-   */
-  function ZoomService () {
-    this._activeZoom            =
-    this._initialScrollPosition =
-    this._initialTouchPosition  =
-    this._touchMoveListener     = null
+    /**
+     * The zoom object
+     */
+    function Zoom(img) {
+        this.fullHeight = null;
+        this.fullWidth = null;
+        this.overlay = null;
+        this.targetImageWrap = null;
 
-    ZOOM_HANDLERS.forEach(function (method) {
-      this[method] = this[method].bind(this)
-    }, this)
-  }
-
-  ZoomService.prototype.listen = function () {
-    document.body.addEventListener('click', this._zoom, false)
-  }
-
-  ZoomService.prototype._zoom = function (e) {
-    var target = e.target
-
-    if (!target || target.tagName != 'IMG' || target.getAttribute('data-action') != 'zoom') return
-
-    if (document.body.classList.contains('zoom-overlay-open')) return
-
-    if (e.metaKey || e.ctrlKey) return window.open(e.target.src, '_blank')
-
-    if (target.width >= (window.innerWidth - Zoom.OFFSET)) return
-
-    this._activeZoomClose(true)
-
-    this._activeZoom = new Zoom(target)
-    this._activeZoom.zoomImage()
-
-    // todo(fat): probably worth throttling this
-    window.addEventListener('scroll', this._scrollHandler, false)
-
-    document.addEventListener('keyup', this._keyHandler, false)
-    document.addEventListener('touchstart', this._touchStart, false)
-
-    // we use a capturing phase here to prevent unintended js events
-    // sadly no useCapture in jquery api (http://bugs.jquery.com/ticket/14953)
-    document.addEventListener('click', this._clickHandler, true)
-
-    e.stopPropagation()
-  }
-
-  ZoomService.prototype._activeZoomClose = function (forceDispose) {
-    if (!this._activeZoom) return
-
-    if (forceDispose) {
-      this._activeZoom.dispose()
-    } else {
-      this._activeZoom.close()
+        this.targetImage = img;
     }
 
-    window.removeEventListener('scroll', this._scrollHandler, false)
-    document.removeEventListener('keyup', this._keyHandler, false)
-    document.removeEventListener('touchstart', this._touchStart, false)
+    Zoom.OFFSET = 80;
+    Zoom.MAXWIDTH = 2560;
+    Zoom.MAXHEIGHT = 4096;
 
-    document.removeEventListener('click', this._clickHandler, true)
+    Zoom.prototype.zoomImage = function () {
+        var img = document.createElement('img');
+        img.onload = function () {
+            this.fullHeight = Number(img.height);
+            this.fullWidth = Number(img.width);
+            this.zoomOriginal();
+        }.bind(this);
+        img.src = this.targetImage.src;
+    };
 
-    this._activeZoom = null
-  }
+    Zoom.prototype.zoomOriginal = function () {
+        this.targetImageWrap = document.createElement('div');
+        this.targetImageWrap.className = 'zoom-img-wrap';
 
-  ZoomService.prototype._scrollHandler = function (e) {
-    if (this._initialScrollPosition === null) this._initialScrollPosition = window.scrollY
-    var deltaY = this._initialScrollPosition - window.scrollY
-    if (Math.abs(deltaY) >= 40) this._activeZoomClose()
-  }
+        this.targetImage.parentNode.insertBefore(this.targetImageWrap, this.targetImage);
+        this.targetImageWrap.appendChild(this.targetImage);
 
-  ZoomService.prototype._keyHandler = function (e) {
-    if (e.keyCode == 27) this._activeZoomClose()
-  }
+        this.targetImage.classList.add('zoom-img');
+        this.targetImage.setAttribute('data-action', 'zoom-out');
 
-  ZoomService.prototype._clickHandler = function (e) {
-    e.stopPropagation()
-    e.preventDefault()
-    this._activeZoomClose()
-  }
+        this.overlay = document.createElement('div');
+        this.overlay.className = 'zoom-overlay';
 
-  ZoomService.prototype._touchStart = function (e) {
-    this._initialTouchPosition = e.touches[0].pageY
-    e.target.addEventListener('touchmove', this._touchMove, false)
-  }
+        document.body.appendChild(this.overlay);
 
-  ZoomService.prototype._touchMove = function (e) {
-    if (Math.abs(e.touches[0].pageY - this._initialTouchPosition) > 10) {
-      this._activeZoomClose()
-      e.target.removeEventListener('touchmove', this._touchMove, false)
+        this.calculateZoom();
+        this.triggerAnimation();
+    };
+
+    Zoom.prototype.calculateZoom = function () {
+        this.targetImage.offsetWidth; // repaint before animating
+
+        var originalFullImageWidth = this.fullWidth,
+            originalFullImageHeight = this.fullHeight,
+
+            maxScaleFactor = originalFullImageWidth / this.targetImage.width,
+
+            viewportHeight = (window.innerHeight - Zoom.OFFSET),
+            viewportWidth = (window.innerWidth - Zoom.OFFSET),
+
+            imageAspectRatio = originalFullImageWidth / originalFullImageHeight,
+            viewportAspectRatio = viewportWidth / viewportHeight;
+
+        if (originalFullImageWidth < viewportWidth && originalFullImageHeight < viewportHeight) {
+            this.imgScaleFactor = maxScaleFactor;
+
+        } else if (imageAspectRatio < viewportAspectRatio) {
+            this.imgScaleFactor = (viewportHeight / originalFullImageHeight) * maxScaleFactor;
+
+        } else {
+            this.imgScaleFactor = (viewportWidth / originalFullImageWidth) * maxScaleFactor;
+        }
+    };
+
+    Zoom.prototype.triggerAnimation = function () {
+        this.targetImage.offsetWidth; // repaint before animating
+
+        var clientRect = this.targetImage.getBoundingClientRect(),
+            scrollTop = window.pageYOffset,
+            imageOffset = {
+                top: scrollTop + clientRect.top,
+                left: window.pageXOffset + clientRect.left
+            },
+
+            viewportY = scrollTop + (window.innerHeight / 2),
+            viewportX = (window.innerWidth / 2),
+
+            imageCenterY = imageOffset.top + (this.targetImage.height / 2),
+            imageCenterX = imageOffset.left + (this.targetImage.width / 2);
+
+        this.translateY = viewportY - imageCenterY;
+        this.translateX = viewportX - imageCenterX;
+
+        this.targetImage.style.transform = 'scale(' + this.imgScaleFactor + ')';
+        this.targetImageWrap.style.transform = 'translate(' + this.translateX + 'px, ' + this.translateY + 'px) translateZ(0)';
+
+        document.body.classList.add('zoom-overlay-open');
+    };
+
+    Zoom.prototype.close = function () {
+        var classList = document.body.classList;
+        classList.remove('zoom-overlay-open');
+        classList.add('zoom-overlay-transitioning');
+
+        // we use setStyle here so that the correct vender prefix for transform is used
+        this.targetImage.style.transform = '';
+        this.targetImageWrap.style.transform = '';
+
+        dispose = function () {
+            this.dispose();
+            this.targetImage.removeEventListener('transitionend', dispose, false);
+        }.bind(this);
+
+        this.targetImage.addEventListener('transitionend', dispose, false);
+    };
+
+    Zoom.prototype.dispose = function () {
+        if (this.targetImageWrap && this.targetImageWrap.parentNode) {
+            this.targetImage.classList.remove('zoom-img');
+            this.targetImage.setAttribute('data-action', 'zoom');
+
+            this.targetImageWrap.parentNode.replaceChild(this.targetImage, this.targetImageWrap);
+            this.overlay.parentNode.removeChild(this.overlay);
+
+            document.body.classList.remove('zoom-overlay-transitioning');
+        }
+    };
+
+    /**
+     * The zoom service
+     */
+    function ZoomService() {
+        this.activeZoom = null;
+        this.initialScrollPosition = null;
+        this.initialTouchPosition = null;
+
+        ZOOMHANDLERS.forEach(function (method) {
+            this[method] = this[method].bind(this);
+        }, this);
     }
-  }
 
+    ZoomService.prototype.listen = function () {
+        document.body.addEventListener('click', this.zoom, false);
+    };
 
-  /**
-   * The zoom object
-   */
-  function Zoom (img) {
-    this._fullHeight      =
-    this._fullWidth       =
-    this._overlay         =
-    this._targetImageWrap = null
+    ZoomService.prototype.zoom = function (e) {
+        var target = e.target;
 
-    this._targetImage = img
-  }
+        if (!target || target.tagName !== 'IMG' || target.getAttribute('data-action') !== 'zoom') {
+            return;
+        }
 
-  Zoom.OFFSET = 80
-  Zoom._MAX_WIDTH = 2560
-  Zoom._MAX_HEIGHT = 4096
+        if (document.body.classList.contains('zoom-overlay-open')) {
+            return;
+        }
 
-  Zoom.prototype.zoomImage = function () {
-    var img = document.createElement('img')
-    img.onload = function () {
-      this._fullHeight = Number(img.height)
-      this._fullWidth = Number(img.width)
-      this._zoomOriginal()
-    }.bind(this)
-    img.src = this._targetImage.src
-  }
+        if (e.metaKey || e.ctrlKey) {
+            return window.open(e.target.src, 'blank');
+        }
 
-  Zoom.prototype._zoomOriginal = function () {
-    this._targetImageWrap           = document.createElement('div')
-    this._targetImageWrap.className = 'zoom-img-wrap'
+        if (target.width >= (window.innerWidth - Zoom.OFFSET)) {
+            return;
+        }
 
-    this._targetImage.parentNode.insertBefore(this._targetImageWrap, this._targetImage)
-    this._targetImageWrap.appendChild(this._targetImage)
+        this.activeZoomClose(true);
 
-    this._targetImage.classList.add('zoom-img')
-    this._targetImage.setAttribute('data-action', 'zoom-out')
+        this.activeZoom = new Zoom(target);
+        this.activeZoom.zoomImage();
 
-    this._overlay           = document.createElement('div')
-    this._overlay.className = 'zoom-overlay'
+        // _todo(fat): probably worth throttling this
+        window.addEventListener('scroll', this.scrollHandler, false);
 
-    document.body.appendChild(this._overlay)
+        document.addEventListener('keyup', this.keyHandler, false);
+        document.addEventListener('touchstart', this.touchStart, false);
 
-    this._calculateZoom()
-    this._triggerAnimation()
-  }
+        // we use a capturing phase here to prevent unintended js events
+        // sadly no useCapture in jquery api (http://bugs.jquery.com/ticket/14953)
+        document.addEventListener('click', this.clickHandler, true);
 
-  Zoom.prototype._calculateZoom = function () {
-    this._targetImage.offsetWidth // repaint before animating
+        e.stopPropagation();
+    };
 
-    var originalFullImageWidth  = this._fullWidth
-    var originalFullImageHeight = this._fullHeight
+    ZoomService.prototype.activeZoomClose = function (forceDispose) {
+        if (!this.activeZoom) {
+            return;
+        }
 
-    var scrollTop = window.scrollY
+        if (forceDispose) {
+            this.activeZoom.dispose();
+        } else {
+            this.activeZoom.close();
+        }
 
-    var maxScaleFactor = originalFullImageWidth / this._targetImage.width
+        window.removeEventListener('scroll', this.scrollHandler, false);
+        document.removeEventListener('keyup', this.keyHandler, false);
+        document.removeEventListener('touchstart', this.touchStart, false);
 
-    var viewportHeight = (window.innerHeight - Zoom.OFFSET)
-    var viewportWidth  = (window.innerWidth - Zoom.OFFSET)
+        document.removeEventListener('click', this.clickHandler, true);
 
-    var imageAspectRatio    = originalFullImageWidth / originalFullImageHeight
-    var viewportAspectRatio = viewportWidth / viewportHeight
+        this.activeZoom = null;
+    };
 
-    if (originalFullImageWidth < viewportWidth && originalFullImageHeight < viewportHeight) {
-      this._imgScaleFactor = maxScaleFactor
+    ZoomService.prototype.scrollHandler = function () {
+        if (this.initialScrollPosition === null) {
+            this.initialScrollPosition = window.scrollY;
+        }
 
-    } else if (imageAspectRatio < viewportAspectRatio) {
-      this._imgScaleFactor = (viewportHeight / originalFullImageHeight) * maxScaleFactor
+        var deltaY = this.initialScrollPosition - window.scrollY;
+        if (Math.abs(deltaY) >= 40) {
+            this.activeZoomClose();
+        }
+    };
 
-    } else {
-      this._imgScaleFactor = (viewportWidth / originalFullImageWidth) * maxScaleFactor
-    }
-  }
+    ZoomService.prototype.keyHandler = function (e) {
+        if (e.keyCode === 27) {
+            this.activeZoomClose();
+        }
+    };
 
-  Zoom.prototype._triggerAnimation = function () {
-    this._targetImage.offsetWidth // repaint before animating
+    ZoomService.prototype.clickHandler = function (e) {
+        e.stopPropagation();
+        e.preventDefault();
+        this.activeZoomClose();
+    };
 
-    var clientRect  = this._targetImage.getBoundingClientRect()
-    var scrollLeft  = window.pageXOffset
-    var scrollTop   = window.pageYOffset
-    var imageOffset = {
-      top: scrollTop + clientRect.top,
-      left: window.pageXOffset + clientRect.left
-    }
+    ZoomService.prototype.touchStart = function (e) {
+        this.initialTouchPosition = e.touches[0].pageY;
+        e.target.addEventListener('touchmove', this.touchMove, false);
+    };
 
-    var viewportY = scrollTop + (window.innerHeight / 2)
-    var viewportX = (window.innerWidth / 2)
+    ZoomService.prototype.touchMove = function (e) {
+        if (Math.abs(e.touches[0].pageY - this.initialTouchPosition) > 10) {
+            this.activeZoomClose();
+            e.target.removeEventListener('touchmove', this.touchMove, false);
+        }
+    };
 
-    var imageCenterY = imageOffset.top + (this._targetImage.height / 2)
-    var imageCenterX = imageOffset.left + (this._targetImage.width / 2)
+    // wait for dom ready (incase script included before body)
+    onload = function () {
+        document.removeEventListener('DOMContentLoaded', onload, false);
+        new ZoomService().listen();
+    };
+    document.addEventListener('DOMContentLoaded', onload, false);
 
-    this._translateY = viewportY - imageCenterY
-    this._translateX = viewportX - imageCenterX
-
-    this._targetImage.style.transform = 'scale(' + this._imgScaleFactor + ')'
-    this._targetImageWrap.style.transform = 'translate(' + this._translateX + 'px, ' + this._translateY + 'px) translateZ(0)'
-
-    document.body.classList.add('zoom-overlay-open')
-  }
-
-  Zoom.prototype.close = function () {
-    var classList = document.body.classList
-    classList.remove('zoom-overlay-open')
-    classList.add('zoom-overlay-transitioning')
-
-    // we use setStyle here so that the correct vender prefix for transform is used
-    this._targetImage.style.transform = ''
-    this._targetImageWrap.style.transform = ''
-
-    var dispose
-    this._targetImage.addEventListener('transitionend', dispose = function()  {
-      this.dispose()
-      this._targetImage.removeEventListener('transitionend', dispose, false)
-    }.bind(this), false)
-  }
-
-  Zoom.prototype.dispose = function () {
-    if (this._targetImageWrap && this._targetImageWrap.parentNode) {
-      this._targetImage.classList.remove('zoom-img')
-      this._targetImage.setAttribute('data-action', 'zoom')
-
-      this._targetImageWrap.parentNode.replaceChild(this._targetImage, this._targetImageWrap)
-      this._overlay.parentNode.removeChild(this._overlay)
-
-      document.body.classList.remove('zoom-overlay-transitioning')
-    }
-  }
-
-  // wait for dom ready (incase script included before body)
-  var onload
-  document.addEventListener('DOMContentLoaded', onload = function () {
-    document.removeEventListener('DOMContentLoaded', onload, false)
-    new ZoomService().listen()
-  }, false)
-
-}(window, document)
+}(window, document));
